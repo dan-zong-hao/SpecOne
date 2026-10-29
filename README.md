@@ -1,6 +1,6 @@
 <div align="center">
 
-<h1>SpecOne: A System-One Decision Model for<br>Constraint-Aware Anti-Jamming</h1>
+<h1>SpecOne: A System-One Decision Model for Constraint-Aware Anti-Jamming</h1>
 
 <a href="#citation"><img src="https://img.shields.io/badge/Paper-under%20review-lightgrey" alt="Paper"></a>
 <a href="https://huggingface.co/OmniJev/OneJev1.6-0.8B"><img src="https://img.shields.io/badge/%F0%9F%A4%97%20Base-OneJev1.6--0.8B-yellow" alt="OneJev1.6-0.8B"></a>
