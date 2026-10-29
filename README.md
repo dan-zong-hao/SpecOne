@@ -3,6 +3,7 @@
 <h1>SpecOne: A System-One Decision Model for Constraint-Aware Anti-Jamming</h1>
 
 <a href="#citation"><img src="https://img.shields.io/badge/Paper-under%20review-lightgrey" alt="Paper"></a>
+<a href="https://huggingface.co/datasets/danzonghao/JamPivot"><img src="https://img.shields.io/badge/%F0%9F%A4%97%20Dataset-JamPivot-yellow" alt="JamPivot dataset"></a>
 <a href="https://huggingface.co/OmniJev/OneJev1.6-0.8B"><img src="https://img.shields.io/badge/%F0%9F%A4%97%20Base-OneJev1.6--0.8B-yellow" alt="OneJev1.6-0.8B"></a>
 <a href="https://huggingface.co/OmniJev/OneJev1.6-4B"><img src="https://img.shields.io/badge/%F0%9F%A4%97%20Base-OneJev1.6--4B-yellow" alt="OneJev1.6-4B"></a>
 <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue" alt="License"></a>
@@ -23,6 +24,7 @@ forward pass.
 
 ## News
 
+- **`2026-10-29`** The JamPivot benchmark is on Hugging Face: [danzonghao/JamPivot](https://huggingface.co/datasets/danzonghao/JamPivot).
 - **`2026-10-29`** Training and inference code released.
 
 ## Contents
@@ -123,7 +125,9 @@ the auxiliary jammer type). Every scene is labelled by the one-step Bayes oracle
 channel–mode actions over the next slot under the known interferer laws, with random hops and Markov users averaged
 over 32 rollouts. The test side holds an in-distribution split, three
 unseen jammer pairs, an unseen phrasing of the constraints, and 1,500 contrast pairs in which one edit of the text, the
-image or the role changes the best action. The JamPivot generator is not part of this repository.
+image or the role changes the best action. The data is on Hugging Face at
+[danzonghao/JamPivot](https://huggingface.co/datasets/danzonghao/JamPivot) (CC BY 4.0); the generator is not part of
+this repository.
 
 ## Results
 
@@ -169,7 +173,17 @@ flash-linear-attention 0.5.2 and causal-conv1d 1.6.1.
 
 ### Data
 
-The scripts read a JamPivot folder `DATA`:
+Download JamPivot from [Hugging Face](https://huggingface.co/datasets/danzonghao/JamPivot) (10.7 GB) and unpack the
+waterfalls from its WebDataset shards:
+
+```bash
+hf download danzonghao/JamPivot --repo-type dataset --local-dir JamPivot
+cd JamPivot
+for f in data/*/*.tar; do s=$(basename "$(dirname "$f")"); mkdir -p media/$s; tar -xf "$f" -C media/$s --wildcards '*.png'; done
+export DATA=$PWD
+```
+
+The scripts read this folder `DATA`:
 
 ```
 DATA/
@@ -177,6 +191,7 @@ DATA/
   scenes_<split>.jsonl   one record per scene with the oracle utility table U (9 channels x 5 modes)
   pairs_<split>.jsonl    contrast pairs of the pair splits
   media/<split>/*.png    the two-panel waterfalls (400 x 530)
+  train_softpairs.jsonl, dev.jsonl   the training and monitoring files, as specone/build_train.py writes them
 ```
 
 <details>
@@ -194,7 +209,7 @@ replaces it with the model's own choice.
 ### Training
 
 ```bash
-python specone/build_train.py $DATA        # writes $DATA/train_softpairs.jsonl and $DATA/dev.jsonl
+python specone/build_train.py $DATA        # writes $DATA/train_softpairs.jsonl and $DATA/dev.jsonl (the download already has them)
 
 # SpecOne-0.8B
 ONEJEV=$ONEJEV DATA=$DATA scripts/train.sh /path/to/OneJev1.6-0.8B specone_0.8b
