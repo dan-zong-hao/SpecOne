@@ -1,0 +1,64 @@
+{
+ "id": "test_id_000000-chan",
+ "source": "jampivot",
+ "task": "chan",
+ "split": "test_id",
+ "state": {
+  "waterfall": "<image:1>",
+  "layout": "Spectrum waterfall of 0-20 MHz. Upper panel: the last 20 ms magnified; lower panel: the last 200 ms. In both the top row is the newest millisecond. The digits 1-9 above mark the centres of nine overlapping 4 MHz channels at 2, 4, ..., 18 MHz. Our own signal is visible. A transmission succeeds in a millisecond when its SINR is at least 10 dB.",
+  "our link": "currently on channel 1 at 2 MHz, normal power",
+  "link budget": "clean-channel SNR 9 dB",
+  "rate requirement": "rate must stay at or above 1/4 of nominal",
+  "power boost": "can raise power by 6 dB at a cost of 0.3",
+  "channel switch": "a switch wastes 0.05 of a slot",
+  "protected users": "no protected users"
+ },
+ "question": {
+  "type": "choice",
+  "instructions": "If our link transmits in the next 10 ms slot, which channel gives the best expected result: rate delivered minus the switching and boost costs, without harming a protected user?",
+  "criteria": {
+   "ch1": "channel 1, centred at 2 MHz",
+   "ch2": "channel 2, centred at 4 MHz",
+   "ch3": "channel 3, centred at 6 MHz",
+   "ch4": "channel 4, centred at 8 MHz",
+   "ch5": "channel 5, centred at 10 MHz",
+   "ch6": "channel 6, centred at 12 MHz",
+   "ch7": "channel 7, centred at 14 MHz",
+   "ch8": "channel 8, centred at 16 MHz",
+   "ch9": "channel 9, centred at 18 MHz"
+  }
+ },
+ "target": {
+  "ch6": 0.333333,
+  "ch7": 0.333333,
+  "ch8": 0.333333
+ },
+ "target_soft": {
+  "ch1": 1e-06,
+  "ch5": 0.041378,
+  "ch6": 0.305747,
+  "ch7": 0.305747,
+  "ch8": 0.305747,
+  "ch9": 0.041378
+ },
+ "media": [
+  {
+   "type": "image",
+   "path": "media/test_id/test_id_000000.png",
+   "h": 530,
+   "w": 400
+  }
+ ],
+ "meta": {
+  "scene": "test_id_000000",
+  "family": "jam",
+  "split": "test_id",
+  "style": 1,
+  "jam_type": "multiple",
+  "optimal": [
+   "ch6",
+   "ch7",
+   "ch8"
+  ]
+ }
+}

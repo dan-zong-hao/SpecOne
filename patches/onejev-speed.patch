@@ -1,0 +1,243 @@
+Speed and memory options for OneJev's trainer (train/sft.py, train/common.py), used to train SpecOne-4B.
+Modifications by the SpecOne authors to OneJev (https://github.com/OmniJev/OneJev, Apache-2.0) at commit
+0b9e163f8114f94a40598c59b0bac473ff446f3c. None of them changes the loss, the data order or the gradient:
+  --fwd-split K          run each micro-batch as K forward/backward chunks (activation memory only)
+  --attn-impl NAME       attn_implementation passed to from_pretrained (e.g. flash_attention_2)
+  --prefetch-workers N   render rows and run the processor in N DataLoader workers, forked once for all epochs
+  --prefetch-timeout S   fall back to inline preparation if a worker stalls
+  --tf32                 allow TF32 for fp32 matmuls and convolutions
+  --save-epochs          also save the weights at the end of every epoch but the last
+Apply inside the OneJev checkout:  git apply /path/to/SpecOne/patches/onejev-speed.patch
+
+diff --git a/train/common.py b/train/common.py
+index 331206f..3479611 100644
+--- a/train/common.py
++++ b/train/common.py
+@@ -289,7 +289,8 @@ def verify_slots(tokenizer, model_path: str) -> list[int]:
+ 
+ 
+ def load_bundle(model_path: str, device: str = "cuda:0", dtype: str = "bfloat16", train: bool = False,
+-                multimodal: bool = False, chat_template: str | None = None, load_model: bool = True) -> Bundle:
++                multimodal: bool = False, chat_template: str | None = None, load_model: bool = True,
++                attn_implementation: str | None = None) -> Bundle:
+     """Load a causal LM the same way qev.engine does, including the Qwen3.5 special case. With multimodal=True the
+     vision model (Qwen3_5ForConditionalGeneration) and its processor are loaded instead of the text-only LM.
+     `chat_template` (a .jinja path) is only for base checkpoints that ship without one."""
+@@ -323,7 +324,8 @@ def load_bundle(model_path: str, device: str = "cuda:0", dtype: str = "bfloat16"
+     model = None
+     if load_model:
+         model = cls.from_pretrained(model_path, config=config, dtype=getattr(torch, dtype),
+-                                    device_map={"": device}, low_cpu_mem_usage=True, **common)
++                                    device_map={"": device}, low_cpu_mem_usage=True, **common,
++                                    **({"attn_implementation": attn_implementation} if attn_implementation else {}))
+         model.train() if train else model.eval()
+     model_type = config.model_type
+     template_kwargs = {"enable_thinking": False} if "qwen" in model_type else {}
+diff --git a/train/sft.py b/train/sft.py
+index 4f6f7bd..6d177f0 100644
+--- a/train/sft.py
++++ b/train/sft.py
+@@ -64,6 +64,20 @@ def build_parser() -> argparse.ArgumentParser:
+     p.add_argument("--seed", type=int, default=0, help="base seed for permutations and batch order")
+     p.add_argument("--log-every", type=int, default=20, help="log every this many optimizer steps")
+     p.add_argument("--save-every", type=int, default=500, help="save the adapter every this many steps")
++    p.add_argument("--save-epochs", action="store_true",
++                   help="also save at the end of every epoch but the last (ckpt-epochN)")
++    p.add_argument("--fwd-split", type=int, default=1,
++                   help="run each plain micro-batch as this many forward/backward chunks of near-equal rows; the step, "
++                        "its rows and the loss weights are unchanged (same gradient), only activation memory drops")
++    p.add_argument("--attn-impl", default=None,
++                   help="attn_implementation for from_pretrained (e.g. flash_attention_2); default: transformers' choice")
++    p.add_argument("--prefetch-workers", type=int, default=0,
++                   help="multimodal plain batches: render, decode images and run the processor for the coming chunks in "
++                        "this many DataLoader worker processes (pinned host tensors, same rendering); 0 does it inline")
++    p.add_argument("--tf32", action="store_true", help="allow TF32 for fp32 matmuls and convolutions")
++    p.add_argument("--prefetch-timeout", type=float, default=600.0,
++                   help="seconds to wait for one prefetched chunk; on a timeout or worker error the remaining chunks "
++                        "are prepared inline (same rendering), so a stuck worker cannot stall training")
+     p.add_argument("--max-steps", type=int, default=0, help="stop after this many steps (0 means no limit)")
+     p.add_argument("--merge", action="store_true", help="merge LoRA into the base and save a full model directory")
+     p.add_argument("--merged-dir", default=None, help="where to write the merged model (default <run dir>/merged)")
+@@ -365,6 +379,24 @@ def save_weights(model, bundle, out_dir: Path, full: bool, sharded: bool = False
+     (bundle.processor or bundle.tokenizer).save_pretrained(str(out_dir))
+ 
+ 
++def _prep_worker_init(_worker_id: int) -> None:
++    import torch
++
++    torch.set_num_threads(4)
++
++
++def split_unit(unit, k: int):
++    """A plain ("batch", rows) unit as k contiguous chunks of near-equal rows (--fwd-split); other units unchanged.
++    Rows are rendered from their own seeds and the loss weight of a chunk is its row share of the step, so the
++    summed gradient is the micro-batch's."""
++    kind, idx = unit
++    if kind != "batch" or k <= 1 or len(idx) < 2:
++        return [unit]
++    k = min(k, len(idx))
++    n = len(idx)
++    return [(kind, idx[j * n // k:(j + 1) * n // k]) for j in range(k)]
++
++
+ def slot_loss(sel, mask, targets, brier_weight: float):
+     """Cross-entropy against a soft target plus a Brier term, both over the K answer slots."""
+     import torch
+@@ -593,13 +625,23 @@ def main(argv=None) -> int:
+         from train import mm as _mm
+ 
+         _mm.set_root(args.media_root)
++    if args.tf32:
++        import torch as _torch
++
++        _torch.backends.cuda.matmul.allow_tf32 = True
++        _torch.backends.cudnn.allow_tf32 = True
++        log.info("TF32 allowed for fp32 matmuls and convolutions")
+     load_dtype = "float32" if args.full_finetune and not args.fsdp else args.dtype
+     bundle = common.load_bundle(args.model, device=args.device, dtype=load_dtype, train=True,
+                                 multimodal=args.multimodal, chat_template=args.chat_template,
+-                                load_model=not args.plan_only)
++                                load_model=not args.plan_only, attn_implementation=args.attn_impl)
+     if args.plan_only:
+         return plan_only(bundle, rows, args, world)
+     log.info("model_type=%s template_kwargs=%s", bundle.model_type, bundle.template_kwargs)
++    _mc = bundle.model.config
++    log.info("attn_implementation %s (text %s, vision %s)", getattr(_mc, "_attn_implementation", None),
++             getattr(getattr(_mc, "text_config", None), "_attn_implementation", None),
++             getattr(getattr(_mc, "vision_config", None), "_attn_implementation", None))
+ 
+     if args.full_finetune:
+         model = bundle.model
+@@ -709,7 +751,50 @@ def main(argv=None) -> int:
+     window = new_window()
+     stop = False
+ 
+-    def unit_forward(unit, epoch):
++    def render_batch(idx, epoch):
++        examples = []
++        for i in idx:
++            seed = args.seed * 1000003 + epoch * 1000033 + i
++            examples.append(common.render_example(rows[i], bundle.template_for(rows[i]), i, seed=seed,
++                                                  augment=args.augment, option_pool=OPTION_POOL,
++                                                  pad_prob=args.pad_options))
++        return examples
++
++    class ChunkPrep:
++        """Host work of every epoch's chunks for DataLoader workers (--prefetch-workers): the inline path's rendering
++        and processor call, tensors left on the CPU. Group units are not prepared."""
++
++        def __init__(self, chunks):
++            self.chunks = chunks                   # (epoch, unit) in loop order
++
++        def __len__(self):
++            return len(self.chunks)
++
++        def __getitem__(self, j):
++            epoch, (kind, idx) = self.chunks[j]
++            if kind != "batch":
++                return {"idx": None}
++            from train import mm
++
++            examples = render_batch(idx, epoch)
++            inputs, ends = mm.mm_inputs(bundle.processor, [ex.prompt for ex in examples],
++                                        [rows[i].get("media") or [] for i in idx], "cpu")
++            return {"idx": list(idx), "examples": examples, "inputs": inputs, "ends": ends}
++
++    prefetch = args.prefetch_workers > 0 and bundle.multimodal and not args.share_prefix and not args.worst_case
++
++    def chunk_feed(chunks):
++        """Prepared chunks in loop order. One loader serves every epoch, so the workers are forked once, before
++        training: workers forked again at an epoch boundary hung on an inherited lock."""
++        import torch.utils.data as tud
++
++        loader = tud.DataLoader(ChunkPrep(chunks), batch_size=None, shuffle=False,
++                                num_workers=args.prefetch_workers, pin_memory=True, prefetch_factor=2,
++                                worker_init_fn=_prep_worker_init, multiprocessing_context="fork",
++                                timeout=args.prefetch_timeout)
++        return iter(loader)
++
++    def unit_forward(unit, epoch, prepared=None):
+         """Slot logits, target and option counts for one unit: a plain batch or a prefix-shared group."""
+         kind, idx = unit
+         if kind == "group":
+@@ -723,17 +808,18 @@ def main(argv=None) -> int:
+                                                             checkpointing=args.gradient_checkpointing)
+             ks = [len(l) for l in labels]
+         else:
+-            examples = []
+-            for i in idx:
+-                seed = args.seed * 1000003 + epoch * 1000033 + i
+-                examples.append(common.render_example(rows[i], bundle.template_for(rows[i]), i, seed=seed,
+-                                                      augment=args.augment, option_pool=OPTION_POOL,
+-                                                      pad_prob=args.pad_options))
++            if prepared is not None and prepared["idx"] != list(idx):
++                raise RuntimeError("prefetched chunk does not match the planned chunk")
++            examples = prepared["examples"] if prepared is not None else render_batch(idx, epoch)
+             if bundle.multimodal:
+                 from train import mm
+ 
+-                inputs, ends = mm.mm_inputs(bundle.processor, [ex.prompt for ex in examples],
+-                                            [rows[i].get("media") or [] for i in idx], device)
++                if prepared is not None:
++                    inputs = {k: v.to(device, non_blocking=True) for k, v in prepared["inputs"].items()}
++                    ends = prepared["ends"]
++                else:
++                    inputs, ends = mm.mm_inputs(bundle.processor, [ex.prompt for ex in examples],
++                                                [rows[i].get("media") or [] for i in idx], device)
+                 with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_autocast(args)):
+                     vocab_logits = mm.mm_readout_logits(model, inputs, ends)
+             else:
+@@ -753,9 +839,21 @@ def main(argv=None) -> int:
+     if eval_sets and args.eval_at_start:
+         run_evals(model, bundle, eval_sets, args, rank, world, 0, logf, is_main)
+ 
++    plans = {0: (steps0, lengths0)}
++    feed = None
++    if prefetch:                                   # plan every epoch now so one loader covers them all
++        for e in range(1, args.epochs):
++            sp, _, ln = plan(e)
++            plans[e] = (sp, ln)
++        chunks = [(e, sub) for e in range(args.epochs) for sp in plans[e][0] for u in step_units(sp)[0]
++                  for sub in split_unit(u, args.fwd_split)]
++        feed = chunk_feed(chunks)
++        log.info("prefetch: %d workers, one loader for %d epochs (%d chunks), timeout %.0f s",
++                 args.prefetch_workers, args.epochs, len(chunks), args.prefetch_timeout)
++
+     for epoch in range(args.epochs):
+-        if epoch == 0:
+-            steps_plan, lengths = steps0, lengths0
++        if epoch in plans:
++            steps_plan, lengths = plans.pop(epoch)
+         else:
+             steps_plan, _, lengths = plan(epoch)
+         for step_plan in steps_plan:
+@@ -766,8 +864,16 @@ def main(argv=None) -> int:
+             grad_scale = world if args.fsdp else 1
+             agg = torch.zeros(4, dtype=torch.float64, device=device)
+             try:
+-                for unit in units:
+-                    sel, mask, tgt = unit_forward(unit, epoch)
++                for unit in (sub for u in units for sub in split_unit(u, args.fwd_split)):
++                    prepared = None
++                    if feed is not None:
++                        try:
++                            prepared = next(feed)
++                        except Exception as exc:  # noqa: BLE001 - a stuck or failed worker must not stop training
++                            log.warning("prefetch failed at step %d (%s: %s); preparing the remaining chunks inline",
++                                        step + 1, type(exc).__name__, str(exc)[:200])
++                            feed = None
++                    sel, mask, tgt = unit_forward(unit, epoch, prepared)
+                     loss, ce, brier, probs = slot_loss(sel, mask, tgt, args.brier_weight)
+                     w = tgt.shape[0] / n_step_rows
+                     (loss * (w * grad_scale)).backward()
+@@ -869,6 +975,10 @@ def main(argv=None) -> int:
+             if args.max_steps and step >= args.max_steps:
+                 stop = True
+                 break
++        if (is_main or args.fsdp) and args.save_epochs and not stop and epoch + 1 < args.epochs:
++            ckpt = run_dir / (f"ckpt-epoch{epoch + 1}" if args.full_finetune else f"adapter-epoch{epoch + 1}")
++            save_weights(model, bundle, ckpt, args.full_finetune, sharded=args.fsdp, is_main=is_main)
++            log.info("saved end of epoch %d (step %d) to %s", epoch + 1, step, ckpt)
+         if stop:
+             break
+ 

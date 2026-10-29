@@ -1,0 +1,28 @@
+# SpecOne recipe (paper Sec. IV and V-A) for OneJev's trainer (python -m train.sft --config configs/specone.yaml).
+# The same settings train SpecOne-0.8B (from OneJev1.6-0.8B) and SpecOne-4B (from OneJev1.6-4B); the base model,
+# data folder, run folder, train file and run name are given on the command line (scripts/train.sh).
+# Loss per answer slot: cross-entropy against the utility-soft target plus brier_weight x Brier term (OneJev's
+# slot_loss). augment: true permutes the option order. All weights are trained, the vision tower included.
+dtype: bfloat16
+multimodal: true
+full_finetune: true
+train_vision: true
+
+lr: 1.0e-5
+epochs: 2
+max_len: 4096
+batch_tokens: 32768     # tokens per forward pass; halve it on a 24 GB GPU (the step still sums accum_rows rows)
+max_rows: 64
+accum_rows: 64          # rows per optimizer step
+brier_weight: 1.0
+warmup_frac: 0.03
+weight_decay: 0.0
+max_grad_norm: 1.0
+
+augment: true
+pad_options: 0.0
+share_prefix: false     # OneJev's prefix sharing does not work with the linear attention of the Qwen3.5 backbone
+seed: 0
+log_every: 20
+save_every: 100000      # only the final weights are saved
+eval_every: 1000

@@ -1,0 +1,55 @@
+{
+ "id": "test_id_000000-mode",
+ "source": "jampivot",
+ "task": "mode",
+ "split": "test_id",
+ "state": {
+  "waterfall": "<image:1>",
+  "layout": "Spectrum waterfall of 0-20 MHz. Upper panel: the last 20 ms magnified; lower panel: the last 200 ms. In both the top row is the newest millisecond. The digits 1-9 above mark the centres of nine overlapping 4 MHz channels at 2, 4, ..., 18 MHz. Our own signal is visible. A transmission succeeds in a millisecond when its SINR is at least 10 dB.",
+  "our link": "currently on channel 1 at 2 MHz, normal power",
+  "link budget": "clean-channel SNR 9 dB",
+  "rate requirement": "rate must stay at or above 1/4 of nominal",
+  "power boost": "can raise power by 6 dB at a cost of 0.3",
+  "channel switch": "a switch wastes 0.05 of a slot",
+  "protected users": "no protected users",
+  "chosen channel": "channel 6 (12 MHz)"
+ },
+ "question": {
+  "type": "choice",
+  "instructions": "On the chosen channel, which transmission mode should our link use in the next slot?",
+  "criteria": {
+   "normal": "normal power and full rate",
+   "boost": "+6 dB transmit power, full rate, extra cost",
+   "spread4": "spreading x4: +6 dB processing gain, 1/4 rate",
+   "spread16": "spreading x16: +12 dB processing gain, 1/16 rate",
+   "mute": "do not transmit in this slot"
+  }
+ },
+ "target": {
+  "boost": 1.0
+ },
+ "target_soft": {
+  "boost": 0.999874,
+  "spread4": 0.000123,
+  "mute": 2e-06
+ },
+ "media": [
+  {
+   "type": "image",
+   "path": "media/test_id/test_id_000000.png",
+   "h": 530,
+   "w": 400
+  }
+ ],
+ "meta": {
+  "scene": "test_id_000000",
+  "family": "jam",
+  "split": "test_id",
+  "style": 1,
+  "jam_type": "multiple",
+  "chosen": "ch6",
+  "optimal": [
+   "boost"
+  ]
+ }
+}

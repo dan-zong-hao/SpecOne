@@ -1,0 +1,13 @@
+# Versions used for the paper (Python 3.12). OneJev itself is used from its checkout (PYTHONPATH=$ONEJEV).
+torch==2.11.0
+transformers==5.9.0
+accelerate==1.14.0
+safetensors==0.8.0
+peft==0.19.1
+pillow==12.2.0
+pyyaml==6.0.3
+numpy==2.3.5
+scipy==1.18.1
+flash-linear-attention==0.5.2   # linear-attention kernels of the Qwen3.5 backbone
+causal-conv1d==1.6.1
+# flash-attn==2.8.3             # only for --attn-impl flash_attention_2 (SpecOne-4B)
